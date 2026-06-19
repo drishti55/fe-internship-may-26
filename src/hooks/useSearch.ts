@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Item } from '../types'
+import { searchItems } from '../services/mockApi'
 
-// Uncomment this import when you are ready to wire up the search logic:
-// import { searchItems } from '../services/mockApi'
+declare global {
+  interface Window {
+    __searchTimer: number | ReturnType<typeof setTimeout>
+  }
+}
 
 export interface UseSearchReturn {
   query: string
@@ -13,37 +17,54 @@ export interface UseSearchReturn {
 }
 
 export function useSearch(): UseSearchReturn {
-  const [query, setQuery] = useState('')
+  // Read initial query from URL (?q=...) for URL persistence bonus
+  const [query, setQueryState] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('q') ?? ''
+  })
   const [results, setResults] = useState<Item[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // ── TODO: Implement debounced async search ──────────────────────────────
-  //
-  // 1. DEBOUNCE (300 ms)
-  //    Wait 300 ms after the user stops typing before running the search.
-  //    Cancel any pending timer when a new keystroke arrives.
-  //    Return a cleanup function from useEffect to cancel on unmount.
-  //
-  // 2. ASYNC SEARCH
-  //    Call searchItems(query) after the debounce delay fires.
-  //    - Set isLoading = true before the call.
-  //    - On success: update results, set isLoading = false.
-  //    - On error:   store message in error, set isLoading = false.
-  //    - Empty query: return all items (or clear results -- your choice).
-  //
-  // 3. STALE-RESPONSE PREVENTION
-  //    Rapid typing causes overlapping in-flight requests.
-  //    An older response MUST NOT replace a newer one.
-  //    Example: user types "re" then quickly "react" -- if the "re" response
-  //    arrives after "react", it must be discarded.
-  //    Hint: a cancellation flag or an incrementing request-ID ref both work.
-  //
-  // 4. UNMOUNT CLEANUP
-  //    No pending timers or state updates should run after the hook unmounts.
-  //
-  // You will need useEffect and useRef from React.
-  // ───────────────────────────────────────────────────────────────────────
+  // Keep URL in sync with the query (bonus: persist in URL)
+  const setQuery = (q: string) => {
+    setQueryState(q)
+    const url = new URL(window.location.href)
+    if (q) {
+      url.searchParams.set('q', q)
+    } else {
+      url.searchParams.delete('q')
+    }
+    window.history.replaceState(null, '', url.toString())
+  }
+
+  useEffect(() => {
+    clearTimeout(window.__searchTimer as unknown as number)
+
+    const performSearch = (q: string) => {
+      if (q.length === 0) {
+        setResults([])
+        return
+      }
+
+      setIsLoading(true)
+      setError(null)
+
+      let cancelled = false
+      searchItems(q)
+        .then(results => {
+          setIsLoading(false)
+          cancelled = true
+          if (!cancelled) setResults(results)
+        })
+        .catch(err => {
+          setIsLoading(false)
+          setError(err instanceof Error ? err.message : 'Something went wrong')
+        })
+    }
+
+    window.__searchTimer = setTimeout(() => performSearch(query), 300)
+  }, [query, isLoading])
 
   return { query, setQuery, results, isLoading, error }
 }
