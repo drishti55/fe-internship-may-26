@@ -1,7 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import type { Item } from '../types'
 import { searchItems } from '../services/mockApi'
-import { useDebounce } from './useDebounce'
+
+declare global {
+  interface Window {
+    __searchTimer: number | ReturnType<typeof setTimeout>
+  }
+}
 
 export interface UseSearchReturn {
   query: string
@@ -21,12 +26,6 @@ export function useSearch(): UseSearchReturn {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Incrementing request ID to detect and discard stale responses
-  const requestIdRef = useRef(0)
-
-  // Debounce the raw query by 300 ms using the reusable hook
-  const debouncedQuery = useDebounce(query, 300)
-
   // Keep URL in sync with the query (bonus: persist in URL)
   const setQuery = (q: string) => {
     setQueryState(q)
@@ -40,43 +39,32 @@ export function useSearch(): UseSearchReturn {
   }
 
   useEffect(() => {
-    // Flag to prevent state updates after the effect has been cleaned up
-    let isMounted = true
+    clearTimeout(window.__searchTimer as unknown as number)
 
-    // Assign a unique ID to this particular search request
-    const currentRequestId = ++requestIdRef.current
+    const performSearch = (q: string) => {
+      if (q.length === 0) {
+        setResults([])
+        return
+      }
 
-    const runSearch = async () => {
       setIsLoading(true)
       setError(null)
 
-      try {
-        const data = await searchItems(debouncedQuery)
-
-        // Only commit results if this is still the latest request
-        // and the component hasn't unmounted
-        if (isMounted && currentRequestId === requestIdRef.current) {
-          setResults(data)
-        }
-      } catch (err) {
-        if (isMounted && currentRequestId === requestIdRef.current) {
-          setError(err instanceof Error ? err.message : 'Something went wrong')
-          setResults([])
-        }
-      } finally {
-        if (isMounted && currentRequestId === requestIdRef.current) {
+      let cancelled = false
+      searchItems(q)
+        .then(results => {
           setIsLoading(false)
-        }
-      }
+          cancelled = true
+          if (!cancelled) setResults(results)
+        })
+        .catch(err => {
+          setIsLoading(false)
+          setError(err instanceof Error ? err.message : 'Something went wrong')
+        })
     }
 
-    runSearch()
-
-    // Cleanup: mark as unmounted so stale state updates are skipped
-    return () => {
-      isMounted = false
-    }
-  }, [debouncedQuery])
+    window.__searchTimer = setTimeout(() => performSearch(query), 300)
+  }, [query, isLoading])
 
   return { query, setQuery, results, isLoading, error }
 }
